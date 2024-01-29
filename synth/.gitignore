@@ -1,2 +1,5 @@
 poetry.lock
 run.py
+/env
+/data
+*.ipynb
