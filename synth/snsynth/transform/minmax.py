@@ -38,25 +38,64 @@ class MinMaxTransformer(CachingColumnTransformer):
     def allocate_privacy_budget(self, epsilon, odometer):
         self.epsilon = epsilon
         self.odometer = odometer
+    # def _fit_finish(self):
+    #     if self.epsilon is not None and self.epsilon > 0.0 and (self.lower is None or self.upper is None):
+    #         self._fit_vals = [v for v in self._fit_vals if v is not None and not (isinstance(v, float) and np.isnan(v))]
+    #         if self.odometer is not None:
+    #             self.odometer.spend(Privacy(epsilon=self.epsilon, delta=0.0))
+    #         self.fit_lower, self.fit_upper = approx_bounds(self._fit_vals, self.epsilon)
+    #         self.budget_spent.append(self.epsilon)
+    #         if self.fit_lower is None or self.fit_upper is None:
+    #             raise ValueError("MinMaxTransformer could not find bounds.")
+    #     elif self.lower is None or self.upper is None:
+    #         raise ValueError("MinMaxTransformer requires either epsilon or min and max.")
+    #     else:
+    #         self.fit_lower = self.lower
+    #         self.fit_upper = self.upper
+    #     self._fit_complete = True
+    #     if self.nullable:
+    #         self.output_width = 2
+    #     else:
+    #         self.output_width = 1
     def _fit_finish(self):
-        if self.epsilon is not None and self.epsilon > 0.0 and (self.lower is None or self.upper is None):
-            self._fit_vals = [v for v in self._fit_vals if v is not None and not (isinstance(v, float) and np.isnan(v))]
-            if self.odometer is not None:
-                self.odometer.spend(Privacy(epsilon=self.epsilon, delta=0.0))
-            self.fit_lower, self.fit_upper = approx_bounds(self._fit_vals, self.epsilon)
-            self.budget_spent.append(self.epsilon)
-            if self.fit_lower is None or self.fit_upper is None:
-                raise ValueError("MinMaxTransformer could not find bounds.")
-        elif self.lower is None or self.upper is None:
-            raise ValueError("MinMaxTransformer requires either epsilon or min and max.")
-        else:
+        self._fit_vals = [
+            v for v in self._fit_vals
+            if v is not None and not (isinstance(v, float) and np.isnan(v))
+        ]
+
+        # If user-supplied bounds exist, just use them—no DP needed.
+        if self.lower is not None and self.upper is not None:
             self.fit_lower = self.lower
             self.fit_upper = self.upper
-        self._fit_complete = True
+            self._fit_complete = True
+            return
+
+        # If we have an epsilon, try DP bounding
+        if self.epsilon is not None and self.epsilon > 0.0 and (self.lower is None or self.upper is None):
+            if self.odometer:
+                self.odometer.spend(Privacy(epsilon=self.epsilon, delta=0.0))
+
+            # Maybe we want to clamp wide outliers first (optional)
+            # For example, clamp to [-1e6, 1e6] so outliers don't ruin the DP estimate
+            clamped_vals = [np.clip(v, -1e6, 1e6) for v in self._fit_vals]
+
+            self.fit_lower, self.fit_upper = approx_bounds(clamped_vals, self.epsilon)
+            self.budget_spent.append(self.epsilon)
+
+            # If DP bounding fails, fallback to (1) wide default range or (2) skip column
+            if self.fit_lower is None or self.fit_upper is None:
+                # Use a large default range
+                self.fit_lower = -1e6
+                self.fit_upper = 1e6
+
+            self._fit_complete = True
+            return
+
         if self.nullable:
             self.output_width = 2
         else:
             self.output_width = 1
+
     def _clear_fit(self):
         self._reset_fit()
         self.fit_lower = None
